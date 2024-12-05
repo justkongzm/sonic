@@ -24,10 +24,13 @@ extern "C" {
 #define SONIC_AMDF_FREQ 4000
 
 /* This is the sample frequency.  You must hard-code it rather than passing it in. */
-#define SONIC_SAMPLE_RATE 8000
+//#define SONIC_SAMPLE_RATE 8000
+#define SONIC_SAMPLE_RATE 48000
 
 /* This is the number of samples in the buffer size passed to Sonic.  */
-#define SONIC_INPUT_SAMPLES 80
+//#define SONIC_INPUT_SAMPLES 80
+#define SONIC_INPUT_SAMPLES 480
+
 
 /* Initialize Sonic. */
 void sonicInit(void);

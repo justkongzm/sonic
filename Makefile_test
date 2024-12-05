@@ -1,0 +1,28 @@
+BINDIR=./bin
+OBJDIR=./obj
+OUTPUT=sonic_test
+
+CXX=gcc
+
+CCFLAGS = -g
+
+INCLUDEDIR=
+
+CODES=sonic_test4.c sonic.c
+
+OBJ=$(patsubst %.cxx,$(OBJDIR)/%.o,$(patsubst %.c,$(OBJDIR)/%.o,$(patsubst %.cpp,$(OBJDIR)/%.o,$(patsubst %.cc,$(OBJDIR)/%.o,$(CODES))))) 
+
+mkdir = @if test ! -d $(1); then mkdir -p $(1); fi
+$(BINDIR)/$(OUTPUT): $(OBJ)
+	$(call mkdir,$(BINDIR))
+	$(CXX) $(OBJ) -o $(BINDIR)/$(OUTPUT) -lm
+
+$(OBJDIR)/%.o:%.c
+	$(call mkdir,$(dir $@))
+	$(CXX) -c $(INCLUDEDIR) $(CCFLAGS) -o $@ $<
+
+all: $(BINDIR)/$(OUTPUT)
+
+clean:
+	@rm -fr $(OBJ)
+	@rm -fr $(BINDIR)/$(OUTPUT)
