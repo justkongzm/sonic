@@ -1021,6 +1021,22 @@ static int skipPitchPeriod(sonicStream stream, short* samples, float speed,
   long newSamples;
   int numChannels = stream->numChannels;
 
+	//speed=2.0
+	// |------period---------|------newSamples-----|    	consumed input: period+newSamples
+	// |------newSamples-----|		  						output: newSamples
+	//newSamples = period，两段newsamples长度的input执行overlapAdd得到newsamples长度的output
+
+	//spped >= 2.0
+	// |------period---------|--newsamples--|				consumed input: period+newSamples
+	// |--newsamples--|	  									output: newSamples, newSamples < period
+	//originInputPlayTime = expectOutputPlayTime*speed
+	//(period+newSamples) * stream->samplePeriod = newSamples * stream->samplePeriod * speed
+	//period + newSamples = newSamples * speed
+	//有一部分input没有参与overlapAdd，直接忽略了
+
+	//1.0<speed<2.0，先按比期望速度快的2倍速处理，后面再按照比期望速度慢的1倍速处理(直接从input中拷贝一段到output)
+	//按2倍速处理，消费2*period的输入得到实际输出period，小于期望输出的数量
+	//实际输出时间小于期望输出时间，计算并保存该差值，后面通过直接从input中拷贝一段到output，来弥补该差值
   if (speed >= 2.0f) {
     /* For speeds >= 2.0, we skip over a portion of each pitch period rather
        than dropping whole pitch periods. */
@@ -1045,6 +1061,26 @@ static int insertPitchPeriod(sonicStream stream, short* samples, float speed,
   short* out;
   int numChannels = stream->numChannels;
 
+	//speed=0.5
+	// |------period---------|		  						input: period
+	// |-----direct copy-----|    							direct copy output: 先从input拷贝period长度的samples到output
+	// |---fade in input-----|----fade out input----|		两段period长度的input执行overlapAdd, consumed input: period
+	// |-----direct copy-----|------newSamples------|    	总输出2*period
+	//newSamples = period
+
+	//speed<=0.5
+	// |------period---------|		  						input: period
+	// |-----direct copy-----|    							direct copy output: 先从input拷贝period长度的samples到output						
+	// |---------------------|--newSamples--|				input 1: newSamples，fade out
+	// |--newSamples--|										input 2: newSamples，fade in. 两段newSamples长度的input执行overlapAdd操作，newSamples小于等于period，已消费的input为newSamples
+	// |-----direct copy-----|--newSamples--|				总输出为period + newSamples
+	// newSamples * stream->samplePeriod = (period + newSamples) * stream->samplePeriod * speed
+	// newSamples = (period + newSamples) * speed
+
+	//0.5<speed<1.0，先按比期望速度慢的0.5倍速处理，后面再按照比期望速度快的1倍速处理(直接从input中拷贝一段到output)
+	//0.5倍速消费period输入得到实际输出(2*period)，实际输出samples大于期望输出
+	//实际输出的时间大于期望输出的时间，计算并保存该差值，后面通过直接从input中拷贝一段到output，来平衡时间上的差值
+
   if (speed <= 0.5f) {
     newSamples = period * speed / (1.0f - speed);
   } else {
@@ -1068,6 +1104,16 @@ static int insertPitchPeriod(sonicStream stream, short* samples, float speed,
 static int copyUnmodifiedSamples(sonicStream stream, short* samples,
                                  float speed, int position, int* newSamples) {
   int availableSamples = stream->numInputSamples - position;
+
+//输入直接拷贝到输出
+//copy * stream->samplePeriod -> 消费的输入播放时间
+//copy * stream->samplePeriod / speed -> 实际输出的播放时间
+
+//speed > 1.0
+//(copy * stream->samplePeriod) - (copy * stream->samplePeriod / speed) = -stream->timeError
+//copy * stream->samplePeriod * (1 - 1 / speed) = -stream->timeError
+//copy * stream->samplePeriod * (speed - 1) / speed) = -stream->timeError
+//copy = -1 * stream->timeError * speed / (stream->samplePeriod * (speed - 1))
   float inputToCopyFloat =
       1 - stream->timeError * speed / (stream->samplePeriod * (speed - 1.0));
 
@@ -1119,6 +1165,12 @@ static int changeSpeed(sonicStream stream, float speed) {
           newSamples = skipPitchPeriod(stream, samples, speed, period);
           position += period + newSamples;
           if (speed < 2.0) {
+			//period = newSamples
+			//newSamples * stream->samplePeriod: 2*newSamples的输入按照2倍速处理得到newSamples的输出对应的播放时间
+			//(period + newSamples) / stream->numInputSamples: 当前处理的2*newSamples的输入占当前总输入的百分比
+			//(period + newSamples) * stream->inputPlayTime / stream->numInputSamples: 当前处理的2*newSamples的输入对应的期望的播放时间
+			//实际输出的samples对应的播放时间小于期望的播放时间，stream->timeError记录该差值的累积和
+			//后面通过将input直接拷贝到outpu，实际的输出时间又大于期望的输出实际，来平衡该差值
             stream->timeError += newSamples * stream->samplePeriod -
                                  (period + newSamples) * stream->inputPlayTime /
                                      stream->numInputSamples;
@@ -1127,6 +1179,12 @@ static int changeSpeed(sonicStream stream, float speed) {
           newSamples = insertPitchPeriod(stream, samples, speed, period);
           position += newSamples;
           if (speed > 0.5) {
+			//period = newSamples
+			//(period + newSamples) * stream->samplePeriod: 2*period的输入按照0.5倍速处理得到period的输出对应的播放时间
+			//newSamples / stream->numInputSamples: 当前已消费的period的输入占总输入的百分比
+			//newSamples * stream->inputPlayTime / stream->numInputSamples: 已消费的输入对应期望的输出时间
+			//实际的输出时间大于期望的输出时间，stream->timeError记录该差值的累积和
+			//后面input直接拷贝到ouput，期望的输出时间又小于实际的输出时间，来平衡该差值
             stream->timeError +=
                 (period + newSamples) * stream->samplePeriod -
                 newSamples * stream->inputPlayTime / stream->numInputSamples;
